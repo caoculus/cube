@@ -5,9 +5,10 @@ in vec3 color;
 
 out vec3 v_color;
 
-uniform mat4 matrix;
+uniform mat4 model;
+uniform mat4 perspective;
 
 void main() {
   v_color = color;
-  gl_Position = matrix * vec4(position, 1.0);
+  gl_Position = perspective * model * vec4(position, 1.0);
 }
