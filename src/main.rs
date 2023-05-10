@@ -5,6 +5,7 @@ use std::{
 };
 
 use glium::{
+    draw_parameters::PolygonOffset,
     glutin::{
         dpi::{PhysicalPosition, PhysicalSize},
         event::{ElementState, Event, MouseButton, WindowEvent},
@@ -12,7 +13,9 @@ use glium::{
         window::WindowBuilder,
         ContextBuilder,
     },
-    implement_vertex, uniform, Display, IndexBuffer, Program, Surface, VertexBuffer,
+    implement_vertex,
+    index::PrimitiveType,
+    uniform, Display, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use itertools::{iproduct, Itertools};
 use nalgebra::{
@@ -37,13 +40,16 @@ const BLUE: Color = [0.0, 0.0, 1.0];
 const GREEN: Color = [0.0, 1.0, 0.0];
 const YELLOW: Color = [1.0, 1.0, 0.0];
 const WHITE: Color = [1.0, 1.0, 1.0];
+
 const GREY: Color = [0.3, 0.3, 0.3];
+const BLACK: Color = [0.0, 0.0, 0.0];
 
 const CUBE_SIZE: usize = 3;
 const N_FACE_CUBIES: usize = CUBE_SIZE.pow(2);
 const N_CUBIES: usize = CUBE_SIZE.pow(3);
 const N_CUBE_FACES: usize = 6;
 const VERTS_PER_CUBIE: usize = 12;
+const EDGES_PER_CUBIE: usize = 12;
 
 const CUBIE_HALF_WIDTH: f32 = 1.0;
 const CUBIE_WIDTH: f32 = CUBIE_HALF_WIDTH * 2.0;
@@ -89,7 +95,6 @@ const LAYERS: [[usize; N_FACE_CUBIES]; 9] = [
 type LayerIdx = usize;
 
 // for tracking the current click state
-// TODO: add enum fields
 #[derive(Default, Debug)]
 enum State {
     #[default]
@@ -116,23 +121,28 @@ struct LayerTurn {
     angle: f32,
 }
 
-fn rect_indices(n: usize) -> Vec<u16> {
+fn face_indices(n: usize) -> Vec<u16> {
+    const FACE_INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
+
     let n_rects = n * N_CUBE_FACES;
-    let mut indices = Vec::with_capacity(n_rects);
 
-    for i in 0..n_rects as u16 {
-        indices.push(4 * i);
-        indices.push(4 * i + 1);
-        indices.push(4 * i + 2);
-        indices.push(4 * i + 1);
-        indices.push(4 * i + 2);
-        indices.push(4 * i + 3);
-    }
-
-    indices
+    (0..n_rects as u16)
+        .cartesian_product(FACE_INDICES)
+        .map(|(i, j)| 4 * i + j)
+        .collect_vec()
 }
 
-// TODO:
+fn edge_indices(n: usize) -> Vec<u16> {
+    const EDGE_INDICES: [u16; 24] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7,
+    ];
+
+    (0..n as u16)
+        .cartesian_product(EDGE_INDICES)
+        .map(|(i, j)| 8 * i + j)
+        .collect_vec()
+}
+
 #[derive(Debug, Clone, Copy, EnumIter)]
 enum Face {
     Left,
@@ -320,23 +330,28 @@ fn update_layer_turn(
     *angle = (dot * FACE_TURN_RATE).rem_euclid(2.0 * PI);
 }
 
+// TODO: draw wireframes
 fn main() {
     let event_loop = EventLoop::new();
     let wb = WindowBuilder::new()
+        .with_title("Rubik's Cube")
         .with_resizable(false)
         .with_inner_size(PhysicalSize::new(600, 600));
     let cb = ContextBuilder::new()
         .with_depth_buffer(24)
         .with_vsync(false);
+
     let display = Display::new(wb, cb, &event_loop).unwrap();
 
     // these indices stay static
-    let indices = IndexBuffer::new(
+    let face_indices = IndexBuffer::new(
         &display,
-        glium::index::PrimitiveType::TrianglesList,
-        &rect_indices(N_CUBIES),
+        PrimitiveType::TrianglesList,
+        &face_indices(N_CUBIES),
     )
     .unwrap();
+    let edge_indices =
+        IndexBuffer::new(&display, PrimitiveType::LinesList, &edge_indices(N_CUBIES)).unwrap();
 
     let corners = {
         let shifts = [-CUBIE_HALF_WIDTH, CUBIE_HALF_WIDTH].into_iter();
@@ -366,94 +381,121 @@ fn main() {
     let mut cube_rotation: UnitQuaternion<f32> = UnitQuaternion::default();
 
     event_loop.run(move |event, _, control_flow| {
-        let next_frame_time = Instant::now() + std::time::Duration::from_nanos(16_666_667);
-        *control_flow = ControlFlow::WaitUntil(next_frame_time);
-
-        let mut target = display.draw();
-        target.clear_color_and_depth((0.8, 0.8, 0.8, 1.0), 1.0);
-
-        let mut vertices: Vec<Vertex> = Vec::with_capacity(VERTS_PER_CUBIE * N_CUBIES);
-
-        // an attempt at deduplication
-        let (face, face_rtn) = if let State::LayerTurn(LayerTurn {
-            layer_idx,
-            cube_axis,
-            angle,
-            ..
-        }) = &state
-        {
-            (
-                LAYERS[*layer_idx]
-                    .into_iter()
-                    .map(|i| cubie_idxs[i])
-                    .collect(),
-                UnitQuaternion::from_axis_angle(cube_axis, *angle),
-            )
-        } else {
-            (HashSet::new(), Default::default())
-        };
-
-        for (i, (&tln, &rtn)) in translations.iter().zip(rotations.iter()).enumerate() {
-            // very ugly way of calculating colors lmao
-            let colors = [
-                if tln.x == MIN_SHIFT { RED } else { GREY },
-                if tln.x == MAX_SHIFT { ORANGE } else { GREY },
-                if tln.y == MIN_SHIFT { BLUE } else { GREY },
-                if tln.y == MAX_SHIFT { GREEN } else { GREY },
-                if tln.z == MIN_SHIFT { YELLOW } else { GREY },
-                if tln.z == MAX_SHIFT { WHITE } else { GREY },
-            ];
-
-            // might need to calculate a new rotation, depending on whether the face is
-            // rotated and whether this cubie matches
-            let rotation = if face.contains(&i) {
-                face_rtn * rtn
-            } else {
-                rtn
-            };
-
-            // now we can iterate over vertices for each cubie face
-            for (cubie_face, color) in CUBE_INDICES.into_iter().zip(colors) {
-                for pos in cubie_face.map(|i| corners[i]) {
-                    vertices.push(Vertex {
-                        position: *rotation.transform_vector(&(pos + tln)).as_ref(),
-                        color,
-                    })
-                }
-            }
+        if !matches!(
+            event,
+            Event::RedrawRequested(..) | Event::WindowEvent { .. }
+        ) {
+            return;
         }
 
-        let vertices = VertexBuffer::new(&display, &vertices).unwrap();
+        let dimensions = display.get_framebuffer_dimensions();
 
         const CUBE_SCALE: f32 = 0.07;
         let model =
             Similarity3::from_parts(Translation3::new(0.0, 0.0, -1.0), cube_rotation, CUBE_SCALE);
-
-        let dimensions = target.get_dimensions();
 
         let perspective = {
             let (width, height) = dimensions;
             Perspective3::new(width as f32 / height as f32, PI / 3.0, 0.1, 1024.0)
         };
 
-        let uniforms = uniform! {
-            model: model.to_homogeneous().as_ref().to_owned(),
-            perspective: perspective.as_matrix().as_ref().to_owned(),
-        };
+        // NOTE: manually requesting redraws makes everything much faster!
+        if let Event::RedrawRequested(..) = event {
+            let mut target = display.draw();
+            target.clear_color_and_depth((0.8, 0.8, 0.8, 1.0), 1.0); // light grey
 
-        let params = glium::DrawParameters {
-            depth: glium::Depth {
-                test: glium::DepthTest::IfLess,
-                write: true,
+            let mut face_vertices: Vec<Vertex> = Vec::with_capacity(VERTS_PER_CUBIE * N_CUBIES);
+            let mut edge_vertices: Vec<Vertex> = Vec::with_capacity(EDGES_PER_CUBIE * N_CUBIES);
+
+            // an attempt at deduplication
+            let (face, face_rtn) = if let State::LayerTurn(LayerTurn {
+                layer_idx,
+                cube_axis,
+                angle,
+                ..
+            }) = &state
+            {
+                (
+                    LAYERS[*layer_idx]
+                        .into_iter()
+                        .map(|i| cubie_idxs[i])
+                        .collect(),
+                    UnitQuaternion::from_axis_angle(cube_axis, *angle),
+                )
+            } else {
+                (HashSet::new(), Default::default())
+            };
+
+            for (i, (&tln, &rtn)) in translations.iter().zip(rotations.iter()).enumerate() {
+                // very ugly way of calculating colors lmao
+                let colors = [
+                    if tln.x == MIN_SHIFT { RED } else { GREY },
+                    if tln.x == MAX_SHIFT { ORANGE } else { GREY },
+                    if tln.y == MIN_SHIFT { BLUE } else { GREY },
+                    if tln.y == MAX_SHIFT { GREEN } else { GREY },
+                    if tln.z == MIN_SHIFT { YELLOW } else { GREY },
+                    if tln.z == MAX_SHIFT { WHITE } else { GREY },
+                ];
+
+                // might need to calculate a new rotation, depending on whether the face is
+                // rotated and whether this cubie matches
+                let rotation = if face.contains(&i) {
+                    face_rtn * rtn
+                } else {
+                    rtn
+                };
+
+                // now we can iterate over vertices for each cubie face
+                for (cubie_face, color) in CUBE_INDICES.into_iter().zip(colors) {
+                    for pos in cubie_face.map(|i| corners[i]) {
+                        face_vertices.push(Vertex {
+                            position: *rotation.transform_vector(&(pos + tln)).as_ref(),
+                            color,
+                        })
+                    }
+                }
+
+                for &pos in &corners {
+                    edge_vertices.push(Vertex {
+                        position: *rotation.transform_vector(&(pos + tln)).as_ref(),
+                        color: BLACK,
+                    })
+                }
+            }
+
+            let face_vertices = VertexBuffer::new(&display, &face_vertices).unwrap();
+
+            let uniforms = uniform! {
+                model: model.to_homogeneous().as_ref().to_owned(),
+                perspective: perspective.as_matrix().as_ref().to_owned(),
+            };
+
+            let params = glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::DepthTest::IfLess,
+                    write: true,
+                    ..Default::default()
+                },
+                line_width: Some(4.0),
+                polygon_offset: PolygonOffset {
+                    line: true,
+                    units: 10.0,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        };
+            };
 
-        target
-            .draw(&vertices, &indices, &program, &uniforms, &params)
-            .unwrap();
-        target.finish().unwrap();
+            target
+                .draw(&face_vertices, &face_indices, &program, &uniforms, &params)
+                .unwrap();
+
+            let edge_vertices = VertexBuffer::new(&display, &edge_vertices).unwrap();
+            target
+                .draw(&edge_vertices, &edge_indices, &program, &uniforms, &params)
+                .unwrap();
+
+            target.finish().unwrap();
+        }
 
         if let Event::WindowEvent { event, .. } = event {
             match event {
@@ -471,6 +513,7 @@ fn main() {
                     } else {
                         State::CubeRotation
                     };
+                    display.gl_window().window().request_redraw();
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
@@ -531,6 +574,7 @@ fn main() {
                             }
                             _ => unreachable!(),
                         };
+                        display.gl_window().window().request_redraw();
                     }
 
                     state = State::Released;
@@ -552,18 +596,21 @@ fn main() {
 
                             // and apply it
                             cube_rotation = d_rotation * cube_rotation;
+                            display.gl_window().window().request_redraw();
                         }
                         State::ClickedFace(clicked) => {
                             let new_pos = mouse_to_screen_coords((x, y), dimensions);
 
                             if let Some(turn) = layer_turn(clicked, new_pos) {
                                 state = State::LayerTurn(turn);
+                                display.gl_window().window().request_redraw();
                             }
                         }
                         State::LayerTurn(turn) => {
                             // this should just modify the layer turn
                             let new_pos = mouse_to_screen_coords((x, y), dimensions);
                             update_layer_turn(turn, new_pos);
+                            display.gl_window().window().request_redraw();
                         }
                         _ => {}
                     };
