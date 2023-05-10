@@ -1,14 +1,13 @@
 use std::{
     collections::HashSet,
     f32::consts::{FRAC_PI_2, PI},
-    time::Instant,
 };
 
 use glium::{
     draw_parameters::PolygonOffset,
     glutin::{
         dpi::{PhysicalPosition, PhysicalSize},
-        event::{ElementState, Event, MouseButton, WindowEvent},
+        event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent},
         event_loop::{ControlFlow, EventLoop},
         window::WindowBuilder,
         ContextBuilder,
@@ -21,6 +20,7 @@ use itertools::{iproduct, Itertools};
 use nalgebra::{
     Perspective3, Point2, Point3, Similarity3, Translation3, Unit, UnitQuaternion, Vector2, Vector3,
 };
+use rand::Rng;
 use strum::{EnumIter, IntoEnumIterator};
 
 type Color = [f32; 3];
@@ -34,49 +34,18 @@ struct Vertex {
 
 implement_vertex!(Vertex, position, color);
 
-const RED: Color = [1.0, 0.0, 0.0];
-const ORANGE: Color = [1.0, 0.5, 0.0];
-const BLUE: Color = [0.0, 0.0, 1.0];
-const GREEN: Color = [0.0, 1.0, 0.0];
-const YELLOW: Color = [1.0, 1.0, 0.0];
-const WHITE: Color = [1.0, 1.0, 1.0];
-
-const GREY: Color = [0.3, 0.3, 0.3];
-const BLACK: Color = [0.0, 0.0, 0.0];
-
 const CUBE_SIZE: usize = 3;
 const N_FACE_CUBIES: usize = CUBE_SIZE.pow(2);
 const N_CUBIES: usize = CUBE_SIZE.pow(3);
 const N_CUBE_FACES: usize = 6;
-const VERTS_PER_CUBIE: usize = 12;
-const EDGES_PER_CUBIE: usize = 12;
 
 const CUBIE_HALF_WIDTH: f32 = 1.0;
 const CUBIE_WIDTH: f32 = CUBIE_HALF_WIDTH * 2.0;
 const MIN_SHIFT: f32 = -CUBIE_WIDTH;
 const MAX_SHIFT: f32 = CUBIE_WIDTH;
 
-const CUBE_INDICES: [[usize; 4]; N_CUBE_FACES] = [
-    [0, 1, 2, 3],
-    [4, 5, 6, 7],
-    [0, 1, 4, 5],
-    [2, 3, 6, 7],
-    [0, 2, 4, 6],
-    [1, 3, 5, 7],
-];
-
-const FACE_DIRS: [Vector3<f32>; N_CUBE_FACES] = [
-    Vector3::new(-1.0, 0.0, 0.0),
-    Vector3::new(1.0, 0.0, 0.0),
-    Vector3::new(0.0, -1.0, 0.0),
-    Vector3::new(0.0, 1.0, 0.0),
-    Vector3::new(0.0, 0.0, -1.0),
-    Vector3::new(0.0, 0.0, 1.0),
-];
 const FACE_DIST: f32 = CUBIE_HALF_WIDTH * (CUBE_SIZE as f32);
-
-const FACE_TURN_RATE: f32 = 5.0;
-const CUBE_ROTATION_RATE: f32 = 0.01;
+const FACE_TURN_RATE: f32 = 4.0;
 
 // NOTE: mind the order here
 // TODO: make a better way to deal with layers?
@@ -108,7 +77,6 @@ enum State {
 struct ClickedFace {
     pos: Point2<f32>,
     screen_axes: [Unit<Vector2<f32>>; 2],
-    cube_axes: [Unit<Vector3<f32>>; 2],
     layers: [LayerIdx; 2],
 }
 
@@ -116,9 +84,18 @@ struct ClickedFace {
 struct LayerTurn {
     pos: Point2<f32>,
     screen_axis: Unit<Vector2<f32>>,
-    cube_axis: Unit<Vector3<f32>>,
     layer_idx: LayerIdx,
     angle: f32,
+}
+
+#[derive(Debug, Clone, Copy, EnumIter)]
+enum Face {
+    Left,
+    Right,
+    Front,
+    Back,
+    Down,
+    Up,
 }
 
 fn face_indices(n: usize) -> Vec<u16> {
@@ -143,20 +120,19 @@ fn edge_indices(n: usize) -> Vec<u16> {
         .collect_vec()
 }
 
-#[derive(Debug, Clone, Copy, EnumIter)]
-enum Face {
-    Left,
-    Right,
-    Front,
-    Back,
-    Down,
-    Up,
-}
-
 fn intersecting_face(start: Point3<f32>, dir: Vector3<f32>) -> Option<(Face, Point3<f32>)> {
     let mut best_face: Option<Face> = None;
     let mut best_dist = f32::INFINITY;
     let mut best_intersection: Point3<f32> = Default::default();
+
+    const FACE_DIRS: [Vector3<f32>; N_CUBE_FACES] = [
+        Vector3::new(-1.0, 0.0, 0.0),
+        Vector3::new(1.0, 0.0, 0.0),
+        Vector3::new(0.0, -1.0, 0.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 0.0, 1.0),
+    ];
 
     for (face, normal) in Face::iter().zip(FACE_DIRS) {
         // skip if line and plane are parallel
@@ -239,12 +215,6 @@ fn clicked_face(
     // NOTE: for consistent face rotations later, we make sure that the cube_axes are only ever the
     // positive x, y, or z axes.
 
-    let cube_axes = match face {
-        Face::Left | Face::Right => [Vector3::y_axis(), Vector3::z_axis()],
-        Face::Front | Face::Back => [Vector3::z_axis(), Vector3::x_axis()],
-        Face::Down | Face::Up => [Vector3::x_axis(), Vector3::y_axis()],
-    };
-
     let screen_axes = {
         let raw_axes = match face {
             Face::Left => [Vector3::z_axis(), -Vector3::y_axis()],
@@ -279,16 +249,23 @@ fn clicked_face(
     Some(ClickedFace {
         pos,
         screen_axes,
-        cube_axes,
         layers,
     })
+}
+
+fn layer_to_axis(layer_idx: usize) -> Unit<Vector3<f32>> {
+    match layer_idx {
+        0 | 1 | 2 => Vector3::x_axis(),
+        3 | 4 | 5 => Vector3::y_axis(),
+        6 | 7 | 8 => Vector3::z_axis(),
+        _ => panic!("layer index {} is out of bounds", layer_idx),
+    }
 }
 
 fn layer_turn(
     ClickedFace {
         pos,
         screen_axes,
-        cube_axes,
         layers,
     }: &ClickedFace,
     new_pos: Point2<f32>,
@@ -310,7 +287,6 @@ fn layer_turn(
     Some(LayerTurn {
         pos,
         screen_axis: screen_axes[i],
-        cube_axis: cube_axes[i],
         layer_idx: layers[i],
         angle: (dots[i] * FACE_TURN_RATE).rem_euclid(2.0 * PI),
     })
@@ -328,6 +304,49 @@ fn update_layer_turn(
     let delta = new_pos - *pos;
     let dot = screen_axis.dot(&delta);
     *angle = (dot * FACE_TURN_RATE).rem_euclid(2.0 * PI);
+}
+
+fn rotate_face(
+    multiple: i32,
+    layer_idx: usize,
+    rotations: &mut [UnitQuaternion<f32>],
+    cubie_idxs: &mut [usize],
+) {
+    let snapped = multiple as f32 * FRAC_PI_2;
+    let rotation = UnitQuaternion::from_axis_angle(&layer_to_axis(layer_idx), snapped);
+    let layer = LAYERS[layer_idx];
+
+    for i in layer.iter().map(|&i| cubie_idxs[i]) {
+        rotations[i] = rotation * rotations[i];
+    }
+
+    match multiple {
+        0 => {}
+        1 => {
+            for orbit in [[0, 2, 8, 6], [1, 5, 7, 3]] {
+                let tmp = cubie_idxs[layer[orbit[0]]];
+                for i in 0..3 {
+                    cubie_idxs[layer[orbit[i]]] = cubie_idxs[layer[orbit[i + 1]]];
+                }
+                cubie_idxs[layer[orbit[3]]] = tmp;
+            }
+        }
+        2 => {
+            for [i, j] in [[0, 8], [2, 6], [1, 7], [3, 5]] {
+                cubie_idxs.swap(layer[i], layer[j]);
+            }
+        }
+        3 => {
+            for orbit in [[0, 6, 8, 2], [1, 3, 7, 5]] {
+                let tmp = cubie_idxs[layer[orbit[0]]];
+                for i in 0..3 {
+                    cubie_idxs[layer[orbit[i]]] = cubie_idxs[layer[orbit[i + 1]]];
+                }
+                cubie_idxs[layer[orbit[3]]] = tmp;
+            }
+        }
+        _ => unreachable!(),
+    };
 }
 
 // TODO: draw wireframes
@@ -390,29 +409,36 @@ fn main() {
 
         let dimensions = display.get_framebuffer_dimensions();
 
-        const CUBE_SCALE: f32 = 0.07;
+        const CUBE_SCALE: f32 = 0.03;
         let model =
             Similarity3::from_parts(Translation3::new(0.0, 0.0, -1.0), cube_rotation, CUBE_SCALE);
 
         let perspective = {
             let (width, height) = dimensions;
-            Perspective3::new(width as f32 / height as f32, PI / 3.0, 0.1, 1024.0)
+            Perspective3::new(width as f32 / height as f32, PI / 6.0, 0.1, 1024.0)
         };
 
         // NOTE: manually requesting redraws makes everything much faster!
         if let Event::RedrawRequested(..) = event {
             let mut target = display.draw();
-            target.clear_color_and_depth((0.8, 0.8, 0.8, 1.0), 1.0); // light grey
+
+            const LIGHT_GREEN: (f32, f32, f32, f32) = (0.45, 0.91, 0.48, 1.0);
+            const LIGHT_GREY: (f32, f32, f32, f32) = (0.9, 0.9, 0.9, 1.0);
+
+            let solved = cubie_idxs.iter().tuple_windows().all(|(a, b)| a < b);
+            let background_color = if solved { LIGHT_GREEN } else { LIGHT_GREY };
+
+            target.clear_color_and_depth(background_color, 1.0);
+
+            const VERTS_PER_CUBIE: usize = 12;
+            const EDGES_PER_CUBIE: usize = 12;
 
             let mut face_vertices: Vec<Vertex> = Vec::with_capacity(VERTS_PER_CUBIE * N_CUBIES);
             let mut edge_vertices: Vec<Vertex> = Vec::with_capacity(EDGES_PER_CUBIE * N_CUBIES);
 
             // an attempt at deduplication
             let (face, face_rtn) = if let State::LayerTurn(LayerTurn {
-                layer_idx,
-                cube_axis,
-                angle,
-                ..
+                layer_idx, angle, ..
             }) = &state
             {
                 (
@@ -420,13 +446,31 @@ fn main() {
                         .into_iter()
                         .map(|i| cubie_idxs[i])
                         .collect(),
-                    UnitQuaternion::from_axis_angle(cube_axis, *angle),
+                    UnitQuaternion::from_axis_angle(&layer_to_axis(*layer_idx), *angle),
                 )
             } else {
                 (HashSet::new(), Default::default())
             };
 
             for (i, (&tln, &rtn)) in translations.iter().zip(rotations.iter()).enumerate() {
+                const RED: Color = [1.0, 0.0, 0.0];
+                const ORANGE: Color = [1.0, 0.5, 0.0];
+                const BLUE: Color = [0.0, 0.0, 1.0];
+                const GREEN: Color = [0.0, 1.0, 0.0];
+                const YELLOW: Color = [1.0, 1.0, 0.0];
+                const WHITE: Color = [1.0, 1.0, 1.0];
+                const GREY: Color = [0.3, 0.3, 0.3];
+                const BLACK: Color = [0.0, 0.0, 0.0];
+
+                const CUBE_INDICES: [[usize; 4]; N_CUBE_FACES] = [
+                    [0, 1, 2, 3],
+                    [4, 5, 6, 7],
+                    [0, 1, 4, 5],
+                    [2, 3, 6, 7],
+                    [0, 2, 4, 6],
+                    [1, 3, 5, 7],
+                ];
+
                 // very ugly way of calculating colors lmao
                 let colors = [
                     if tln.x == MIN_SHIFT { RED } else { GREY },
@@ -495,9 +539,7 @@ fn main() {
                 .unwrap();
 
             target.finish().unwrap();
-        }
-
-        if let Event::WindowEvent { event, .. } = event {
+        } else if let Event::WindowEvent { event, .. } = event {
             match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
@@ -521,10 +563,7 @@ fn main() {
                     ..
                 } => {
                     if let State::LayerTurn(LayerTurn {
-                        cube_axis,
-                        layer_idx,
-                        angle,
-                        ..
+                        layer_idx, angle, ..
                     }) = state
                     {
                         // snap angle to nearest multiple of PI / 2
@@ -536,44 +575,8 @@ fn main() {
                             } else {
                                 m
                             }
-                        };
-                        let snapped = multiple * FRAC_PI_2;
-                        let rotation = UnitQuaternion::from_axis_angle(&cube_axis, snapped);
-                        let layer = LAYERS[layer_idx];
-
-                        for i in layer.iter().map(|&i| cubie_idxs[i]) {
-                            rotations[i] = rotation * rotations[i];
-                        }
-
-                        match multiple as i32 {
-                            0 => {}
-                            1 => {
-                                for orbit in [[0, 2, 8, 6], [1, 5, 7, 3]] {
-                                    let tmp = cubie_idxs[layer[orbit[0]]];
-                                    for i in 0..3 {
-                                        cubie_idxs[layer[orbit[i]]] =
-                                            cubie_idxs[layer[orbit[i + 1]]];
-                                    }
-                                    cubie_idxs[layer[orbit[3]]] = tmp;
-                                }
-                            }
-                            2 => {
-                                for [i, j] in [[0, 8], [2, 6], [1, 7], [3, 5]] {
-                                    cubie_idxs.swap(layer[i], layer[j]);
-                                }
-                            }
-                            3 => {
-                                for orbit in [[0, 6, 8, 2], [1, 3, 7, 5]] {
-                                    let tmp = cubie_idxs[layer[orbit[0]]];
-                                    for i in 0..3 {
-                                        cubie_idxs[layer[orbit[i]]] =
-                                            cubie_idxs[layer[orbit[i + 1]]];
-                                    }
-                                    cubie_idxs[layer[orbit[3]]] = tmp;
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
+                        } as i32;
+                        rotate_face(multiple, layer_idx, &mut rotations, &mut cubie_idxs);
                         display.gl_window().window().request_redraw();
                     }
 
@@ -585,6 +588,8 @@ fn main() {
                 } => {
                     match &mut state {
                         State::CubeRotation => {
+                            const CUBE_ROTATION_RATE: f32 = 0.007;
+
                             // calculate a delta
                             let (x0, y0) = mouse_pos;
                             let (dx, dy) = ((x - x0) as f32, (y - y0) as f32);
@@ -617,6 +622,35 @@ fn main() {
 
                     mouse_pos = (x, y);
                 }
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(keycode),
+                            ..
+                        },
+                    ..
+                } => match keycode {
+                    VirtualKeyCode::Q => {
+                        *control_flow = ControlFlow::Exit;
+                    }
+                    VirtualKeyCode::R => {
+                        // reset everything
+                        cubie_idxs = (0..N_CUBIES).collect();
+                        rotations.fill(Default::default());
+                        display.gl_window().window().request_redraw();
+                    }
+                    VirtualKeyCode::S => {
+                        // random face turns
+                        for _ in 0..100 {
+                            let layer_idx = rand::thread_rng().gen_range(0..LAYERS.len());
+                            let multiple = rand::thread_rng().gen_range(1..=3);
+                            rotate_face(multiple, layer_idx, &mut rotations, &mut cubie_idxs);
+                        }
+                        display.gl_window().window().request_redraw();
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
