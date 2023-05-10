@@ -1,8 +1,11 @@
+mod rotation;
+
 use std::{
     collections::HashSet,
     f32::consts::{FRAC_PI_2, PI},
 };
 
+use approx::AbsDiffEq;
 use glium::{
     draw_parameters::PolygonOffset,
     glutin::{
@@ -18,7 +21,7 @@ use glium::{
 };
 use itertools::{iproduct, Itertools};
 use nalgebra::{
-    Perspective3, Point2, Point3, Similarity3, Translation3, Unit, UnitQuaternion, Vector2, Vector3,
+    Perspective3, Point2, Point3, Rotation3, Similarity3, Translation3, Unit, Vector2, Vector3,
 };
 use rand::Rng;
 use strum::{EnumIter, IntoEnumIterator};
@@ -309,13 +312,14 @@ fn update_layer_turn(
 fn rotate_face(
     multiple: i32,
     layer_idx: usize,
-    rotations: &mut [UnitQuaternion<f32>],
+    rotations: &mut [Rotation3<f32>],
     cubie_idxs: &mut [usize],
 ) {
     let snapped = multiple as f32 * FRAC_PI_2;
-    let rotation = UnitQuaternion::from_axis_angle(&layer_to_axis(layer_idx), snapped);
+    let rotation = Rotation3::from_axis_angle(&layer_to_axis(layer_idx), snapped);
     let layer = LAYERS[layer_idx];
 
+    // TODO: additional snapping
     for i in layer.iter().map(|&i| cubie_idxs[i]) {
         rotations[i] = rotation * rotations[i];
     }
@@ -392,12 +396,12 @@ fn main() {
         Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
     // mutable state of the cubie rotations
-    let mut rotations: Vec<UnitQuaternion<f32>> = vec![Default::default(); N_CUBIES];
+    let mut rotations: Vec<Rotation3<f32>> = vec![Default::default(); N_CUBIES];
     let mut cubie_idxs = (0..N_CUBIES).collect_vec();
 
     let mut mouse_pos = (0.0, 0.0);
     let mut state = State::default();
-    let mut cube_rotation: UnitQuaternion<f32> = UnitQuaternion::default();
+    let mut cube_rotation: Rotation3<f32> = Rotation3::default();
 
     event_loop.run(move |event, _, control_flow| {
         if !matches!(
@@ -410,8 +414,11 @@ fn main() {
         let dimensions = display.get_framebuffer_dimensions();
 
         const CUBE_SCALE: f32 = 0.03;
-        let model =
-            Similarity3::from_parts(Translation3::new(0.0, 0.0, -1.0), cube_rotation, CUBE_SCALE);
+        let model = Similarity3::from_parts(
+            Translation3::new(0.0, 0.0, -1.0),
+            cube_rotation.into(),
+            CUBE_SCALE,
+        );
 
         let perspective = {
             let (width, height) = dimensions;
@@ -425,7 +432,10 @@ fn main() {
             const LIGHT_GREEN: (f32, f32, f32, f32) = (0.45, 0.91, 0.48, 1.0);
             const LIGHT_GREY: (f32, f32, f32, f32) = (0.9, 0.9, 0.9, 1.0);
 
-            let solved = cubie_idxs.iter().tuple_windows().all(|(a, b)| a < b);
+            let solved = rotations
+                .iter()
+                .tuple_windows()
+                .all(|(a, b)| a.abs_diff_eq(b, 0.001));
             let background_color = if solved { LIGHT_GREEN } else { LIGHT_GREY };
 
             target.clear_color_and_depth(background_color, 1.0);
@@ -446,7 +456,7 @@ fn main() {
                         .into_iter()
                         .map(|i| cubie_idxs[i])
                         .collect(),
-                    UnitQuaternion::from_axis_angle(&layer_to_axis(*layer_idx), *angle),
+                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx), *angle),
                 )
             } else {
                 (HashSet::new(), Default::default())
@@ -595,7 +605,7 @@ fn main() {
                             let (dx, dy) = ((x - x0) as f32, (y - y0) as f32);
 
                             // convert delta to a rotation
-                            let d_rotation = UnitQuaternion::from_scaled_axis(
+                            let d_rotation = Rotation3::from_scaled_axis(
                                 Vector3::new(dy, dx, 0.0).scale(CUBE_ROTATION_RATE),
                             );
 
