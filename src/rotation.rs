@@ -138,8 +138,8 @@ impl CubeRotation {
         }
     }
 
-    pub fn as_basis(&self) -> &[BasisVector; 3] {
-        &self.basis
+    pub fn basis(&self) -> [BasisVector; 3] {
+        self.basis
     }
 
     pub fn to_rotation3(self) -> Rotation3<f32> {

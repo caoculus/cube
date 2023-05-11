@@ -1,3 +1,4 @@
+mod cube;
 mod rotation;
 
 use std::{
@@ -5,10 +6,11 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
+use cube::Cube;
 use glium::{
     draw_parameters::PolygonOffset,
     glutin::{
-        dpi::{PhysicalPosition, PhysicalSize},
+        dpi::PhysicalPosition,
         event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent},
         event_loop::{ControlFlow, EventLoop},
         window::WindowBuilder,
@@ -22,11 +24,14 @@ use itertools::{iproduct, Itertools};
 use nalgebra::{
     Perspective3, Point2, Point3, Rotation3, Similarity3, Translation3, Unit, Vector2, Vector3,
 };
-use rand::Rng;
-use rotation::{Axis, CubeRotation, QuarterTurn};
+use rand::{seq::SliceRandom, Rng};
+use rotation::{Axis, QuarterTurn};
 use strum::{EnumIter, IntoEnumIterator};
 
+use crate::cube::LAYERS;
+
 type Color = [f32; 3];
+type LayerIdx = usize;
 
 // each vertex should have a color associated with it
 #[derive(Clone, Copy)]
@@ -38,7 +43,6 @@ struct Vertex {
 implement_vertex!(Vertex, position, color);
 
 const CUBE_SIZE: usize = 3;
-const N_FACE_CUBIES: usize = CUBE_SIZE.pow(2);
 const N_CUBIES: usize = CUBE_SIZE.pow(3);
 const N_CUBE_FACES: usize = 6;
 
@@ -49,22 +53,6 @@ const MAX_SHIFT: f32 = CUBIE_WIDTH;
 
 const FACE_DIST: f32 = CUBIE_HALF_WIDTH * (CUBE_SIZE as f32);
 const FACE_TURN_RATE: f32 = 4.0;
-
-// NOTE: mind the order here
-// TODO: make a better way to deal with layers?
-const LAYERS: [[usize; N_FACE_CUBIES]; 9] = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8],
-    [9, 10, 11, 12, 13, 14, 15, 16, 17],
-    [18, 19, 20, 21, 22, 23, 24, 25, 26],
-    [2, 1, 0, 11, 10, 9, 20, 19, 18],
-    [5, 4, 3, 14, 13, 12, 23, 22, 21],
-    [8, 7, 6, 17, 16, 15, 26, 25, 24],
-    [0, 3, 6, 9, 12, 15, 18, 21, 24],
-    [1, 4, 7, 10, 13, 16, 19, 22, 25],
-    [2, 5, 8, 11, 14, 17, 20, 23, 26],
-];
-
-type LayerIdx = usize;
 
 // for tracking the current click state
 #[derive(Default, Debug)]
@@ -257,10 +245,10 @@ fn clicked_face(
 }
 
 fn layer_to_axis(layer_idx: usize) -> Axis {
-    match layer_idx {
-        0 | 1 | 2 => Axis::X,
-        3 | 4 | 5 => Axis::Y,
-        6 | 7 | 8 => Axis::Z,
+    match layer_idx / CUBE_SIZE {
+        0 => Axis::X,
+        1 => Axis::Y,
+        2 => Axis::Z,
         _ => panic!("layer index {} is out of bounds", layer_idx),
     }
 }
@@ -309,59 +297,11 @@ fn update_layer_turn(
     *angle = (dot * FACE_TURN_RATE).rem_euclid(2.0 * PI);
 }
 
-fn rotate_face(
-    turn: QuarterTurn,
-    layer_idx: usize,
-    rotations: &mut [CubeRotation],
-    cubie_idxs: &mut [usize],
-) {
-    let rotation = CubeRotation::from_axis_turn(layer_to_axis(layer_idx), turn);
-    let layer = LAYERS[layer_idx];
-
-    // TODO: additional snapping
-    for i in layer.iter().map(|&i| cubie_idxs[i]) {
-        rotations[i] = rotation * rotations[i];
-    }
-
-    match turn {
-        QuarterTurn::Quarter => {
-            for orbit in [[0, 2, 8, 6], [1, 5, 7, 3]] {
-                let tmp = cubie_idxs[layer[orbit[0]]];
-                for i in 0..3 {
-                    cubie_idxs[layer[orbit[i]]] = cubie_idxs[layer[orbit[i + 1]]];
-                }
-                cubie_idxs[layer[orbit[3]]] = tmp;
-            }
-        }
-        QuarterTurn::Half => {
-            for [i, j] in [[0, 8], [2, 6], [1, 7], [3, 5]] {
-                cubie_idxs.swap(layer[i], layer[j]);
-            }
-        }
-        QuarterTurn::ThreeQuarters => {
-            for orbit in [[0, 6, 8, 2], [1, 3, 7, 5]] {
-                let tmp = cubie_idxs[layer[orbit[0]]];
-                for i in 0..3 {
-                    cubie_idxs[layer[orbit[i]]] = cubie_idxs[layer[orbit[i + 1]]];
-                }
-                cubie_idxs[layer[orbit[3]]] = tmp;
-            }
-        }
-        _ => {}
-    };
-}
-
-fn is_solved(cubie_idxs: &[usize]) -> bool {
-    todo!()
-}
-
-// TODO: draw wireframes
 fn main() {
     let event_loop = EventLoop::new();
-    let wb = WindowBuilder::new()
-        .with_title("Rubik's Cube")
-        .with_resizable(false)
-        .with_inner_size(PhysicalSize::new(600, 600));
+    let wb = WindowBuilder::new().with_title("Rubik's Cube");
+    // .with_resizable(false)
+    // .with_inner_size(PhysicalSize::new(600, 600));
     let cb = ContextBuilder::new()
         .with_depth_buffer(24)
         .with_vsync(false);
@@ -398,8 +338,7 @@ fn main() {
         Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
     // mutable state of the cubie rotations
-    let mut rotations: Vec<CubeRotation> = vec![Default::default(); N_CUBIES];
-    let mut cubie_idxs = (0..N_CUBIES).collect_vec();
+    let mut cube = Cube::new();
 
     let mut mouse_pos = (0.0, 0.0);
     let mut state = State::default();
@@ -434,7 +373,7 @@ fn main() {
             const LIGHT_GREEN: (f32, f32, f32, f32) = (0.45, 0.91, 0.48, 1.0);
             const LIGHT_GREY: (f32, f32, f32, f32) = (0.9, 0.9, 0.9, 1.0);
 
-            let background_color = if is_solved(&cubie_idxs) {
+            let background_color = if cube.is_solved() {
                 LIGHT_GREEN
             } else {
                 LIGHT_GREY
@@ -456,7 +395,7 @@ fn main() {
                 (
                     LAYERS[*layer_idx]
                         .into_iter()
-                        .map(|i| cubie_idxs[i])
+                        .map(|i| cube.cubie_indices()[i])
                         .collect(),
                     Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit(), *angle),
                 )
@@ -464,7 +403,7 @@ fn main() {
                 (HashSet::new(), Default::default())
             };
 
-            for (i, (&tln, &rtn)) in translations.iter().zip(rotations.iter()).enumerate() {
+            for (i, (&tln, &rtn)) in translations.iter().zip(cube.rotations()).enumerate() {
                 const RED: Color = [1.0, 0.0, 0.0];
                 const ORANGE: Color = [1.0, 0.5, 0.0];
                 const BLUE: Color = [0.0, 0.0, 1.0];
@@ -533,9 +472,10 @@ fn main() {
                     ..Default::default()
                 },
                 line_width: Some(4.0),
+                // NOTE: positive polygon offset = farther back
                 polygon_offset: PolygonOffset {
-                    line: true,
-                    units: 10.0,
+                    fill: true,
+                    units: 1.0,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -586,7 +526,7 @@ fn main() {
                             3 => QuarterTurn::ThreeQuarters,
                             _ => unreachable!("multiple should always be between 0 and 4"),
                         };
-                        rotate_face(turn, layer_idx, &mut rotations, &mut cubie_idxs);
+                        cube.rotate_layer(layer_idx, turn);
                         display.gl_window().window().request_redraw();
                     }
 
@@ -646,21 +586,24 @@ fn main() {
                     }
                     VirtualKeyCode::R => {
                         // reset everything
-                        cubie_idxs = (0..N_CUBIES).collect();
-                        rotations.fill(Default::default());
+                        cube.reset();
                         display.gl_window().window().request_redraw();
                     }
                     VirtualKeyCode::S => {
                         // random face turns
                         for _ in 0..100 {
-                            let layer_idx = rand::thread_rng().gen_range(0..LAYERS.len());
-                            let turn = match rand::thread_rng().gen_range(1..=3) {
+                            const FRINGE_LAYERS: [usize; 6] = [0, 2, 3, 5, 6, 8];
+
+                            let mut rng = rand::thread_rng();
+
+                            let layer_idx = *FRINGE_LAYERS.choose(&mut rng).unwrap();
+                            let turn = match rng.gen_range(1..=3) {
                                 1 => QuarterTurn::Quarter,
                                 2 => QuarterTurn::Half,
                                 3 => QuarterTurn::ThreeQuarters,
                                 _ => unreachable!(),
                             };
-                            rotate_face(turn, layer_idx, &mut rotations, &mut cubie_idxs);
+                            cube.rotate_layer(layer_idx, turn);
                         }
                         display.gl_window().window().request_redraw();
                     }
