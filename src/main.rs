@@ -5,7 +5,6 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
-use approx::AbsDiffEq;
 use glium::{
     draw_parameters::PolygonOffset,
     glutin::{
@@ -24,6 +23,7 @@ use nalgebra::{
     Perspective3, Point2, Point3, Rotation3, Similarity3, Translation3, Unit, Vector2, Vector3,
 };
 use rand::Rng;
+use rotation::{Axis, CubeRotation, Turn};
 use strum::{EnumIter, IntoEnumIterator};
 
 type Color = [f32; 3];
@@ -256,11 +256,11 @@ fn clicked_face(
     })
 }
 
-fn layer_to_axis(layer_idx: usize) -> Unit<Vector3<f32>> {
+fn layer_to_axis(layer_idx: usize) -> Axis {
     match layer_idx {
-        0 | 1 | 2 => Vector3::x_axis(),
-        3 | 4 | 5 => Vector3::y_axis(),
-        6 | 7 | 8 => Vector3::z_axis(),
+        0 | 1 | 2 => Axis::X,
+        3 | 4 | 5 => Axis::Y,
+        6 | 7 | 8 => Axis::Z,
         _ => panic!("layer index {} is out of bounds", layer_idx),
     }
 }
@@ -312,11 +312,17 @@ fn update_layer_turn(
 fn rotate_face(
     multiple: i32,
     layer_idx: usize,
-    rotations: &mut [Rotation3<f32>],
+    rotations: &mut [CubeRotation],
     cubie_idxs: &mut [usize],
 ) {
-    let snapped = multiple as f32 * FRAC_PI_2;
-    let rotation = Rotation3::from_axis_angle(&layer_to_axis(layer_idx), snapped);
+    let turn = match multiple {
+        0 => Turn::None,
+        1 => Turn::Ccw,
+        2 => Turn::Half,
+        3 => Turn::Cw,
+        _ => panic!("multiple is out of bounds"),
+    };
+    let rotation = CubeRotation::from_axis_turn(layer_to_axis(layer_idx), turn);
     let layer = LAYERS[layer_idx];
 
     // TODO: additional snapping
@@ -324,9 +330,8 @@ fn rotate_face(
         rotations[i] = rotation * rotations[i];
     }
 
-    match multiple {
-        0 => {}
-        1 => {
+    match turn {
+        Turn::Ccw => {
             for orbit in [[0, 2, 8, 6], [1, 5, 7, 3]] {
                 let tmp = cubie_idxs[layer[orbit[0]]];
                 for i in 0..3 {
@@ -335,12 +340,12 @@ fn rotate_face(
                 cubie_idxs[layer[orbit[3]]] = tmp;
             }
         }
-        2 => {
+        Turn::Half => {
             for [i, j] in [[0, 8], [2, 6], [1, 7], [3, 5]] {
                 cubie_idxs.swap(layer[i], layer[j]);
             }
         }
-        3 => {
+        Turn::Cw => {
             for orbit in [[0, 6, 8, 2], [1, 3, 7, 5]] {
                 let tmp = cubie_idxs[layer[orbit[0]]];
                 for i in 0..3 {
@@ -349,7 +354,7 @@ fn rotate_face(
                 cubie_idxs[layer[orbit[3]]] = tmp;
             }
         }
-        _ => unreachable!(),
+        _ => {}
     };
 }
 
@@ -396,7 +401,7 @@ fn main() {
         Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
     // mutable state of the cubie rotations
-    let mut rotations: Vec<Rotation3<f32>> = vec![Default::default(); N_CUBIES];
+    let mut rotations: Vec<CubeRotation> = vec![Default::default(); N_CUBIES];
     let mut cubie_idxs = (0..N_CUBIES).collect_vec();
 
     let mut mouse_pos = (0.0, 0.0);
@@ -432,10 +437,9 @@ fn main() {
             const LIGHT_GREEN: (f32, f32, f32, f32) = (0.45, 0.91, 0.48, 1.0);
             const LIGHT_GREY: (f32, f32, f32, f32) = (0.9, 0.9, 0.9, 1.0);
 
-            let solved = rotations
-                .iter()
-                .tuple_windows()
-                .all(|(a, b)| a.abs_diff_eq(b, 0.001));
+            // FIXME: using rotations to check whether the cube is solved doesn't work!!!
+            // e.g., if the centers are rotated
+            let solved = rotations.iter().all_equal();
             let background_color = if solved { LIGHT_GREEN } else { LIGHT_GREY };
 
             target.clear_color_and_depth(background_color, 1.0);
@@ -456,7 +460,7 @@ fn main() {
                         .into_iter()
                         .map(|i| cubie_idxs[i])
                         .collect(),
-                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx), *angle),
+                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit_vector(), *angle),
                 )
             } else {
                 (HashSet::new(), Default::default())
@@ -494,9 +498,9 @@ fn main() {
                 // might need to calculate a new rotation, depending on whether the face is
                 // rotated and whether this cubie matches
                 let rotation = if face.contains(&i) {
-                    face_rtn * rtn
+                    face_rtn * rtn.to_rotation3()
                 } else {
-                    rtn
+                    rtn.to_rotation3()
                 };
 
                 // now we can iterate over vertices for each cubie face
@@ -576,11 +580,9 @@ fn main() {
                         layer_idx, angle, ..
                     }) = state
                     {
-                        // snap angle to nearest multiple of PI / 2
-                        // doesn't look like this accumulates errors
                         let multiple = {
                             let m = (angle / FRAC_PI_2).round();
-                            if m >= 4.0 {
+                            if m == 4.0 {
                                 0.0
                             } else {
                                 m

@@ -1,6 +1,6 @@
 use std::ops::Mul;
 
-use nalgebra::{Rotation3, Vector3};
+use nalgebra::{Rotation3, Unit, Vector3};
 
 const S4_LUT: [[usize; 24]; 24] = [
     [
@@ -77,7 +77,7 @@ const S4_LUT: [[usize; 24]; 24] = [
     ],
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CubeRotation(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +85,16 @@ pub enum Axis {
     X,
     Y,
     Z,
+}
+
+impl Axis {
+    pub fn to_unit_vector(self) -> Unit<Vector3<f32>> {
+        match self {
+            Axis::X => Vector3::x_axis(),
+            Axis::Y => Vector3::y_axis(),
+            Axis::Z => Vector3::z_axis(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,69 +114,50 @@ impl Mul for CubeRotation {
 }
 
 impl CubeRotation {
+    pub fn from_axis_turn(axis: Axis, turn: Turn) -> Self {
+        const LUT: [[usize; 4]; 3] = [[0, 17, 7, 22], [0, 10, 23, 13], [0, 18, 16, 9]];
+        Self(LUT[axis as usize][turn as usize])
+    }
+
     pub fn to_rotation3(self) -> Rotation3<f32> {
         fn rotation(a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>) -> Rotation3<f32> {
             Rotation3::from_basis_unchecked(&[a, b, c])
         }
-        fn x_axis() -> Vector3<f32> {
+        fn x() -> Vector3<f32> {
             Vector3::x_axis().into_inner()
         }
-        fn y_axis() -> Vector3<f32> {
+        fn y() -> Vector3<f32> {
             Vector3::y_axis().into_inner()
         }
-        fn z_axis() -> Vector3<f32> {
+        fn z() -> Vector3<f32> {
             Vector3::z_axis().into_inner()
         }
 
-        // 0 -> [0, 1, 2, 3]
-        // 1 -> [0, 1, 3, 2]
-        // 2 -> [0, 2, 1, 3]
-        // 3 -> [0, 2, 3, 1]
-        // 4 -> [0, 3, 1, 2]
-        // 5 -> [0, 3, 2, 1]
-        // 6 -> [1, 0, 2, 3]
-        // 7 -> [1, 0, 3, 2]
-        // 8 -> [1, 2, 0, 3]
-        // 9 -> [1, 2, 3, 0]
-        // 10 -> [1, 3, 0, 2]
-        // 11 -> [1, 3, 2, 0]
-        // 12 -> [2, 0, 1, 3]
-        // 13 -> [2, 0, 3, 1]
-        // 14 -> [2, 1, 0, 3]
-        // 15 -> [2, 1, 3, 0]
-        // 16 -> [2, 3, 0, 1]
-        // 17 -> [2, 3, 1, 0]
-        // 18 -> [3, 0, 1, 2]
-        // 19 -> [3, 0, 2, 1]
-        // 20 -> [3, 1, 0, 2]
-        // 21 -> [3, 1, 2, 0]
-        // 22 -> [3, 2, 0, 1]
-        // 23 -> [3, 2, 1, 0]
         match self.0 {
-            0 => rotation(x_axis(), y_axis(), z_axis()),
-            1 => rotation(-x_axis(), -z_axis(), -y_axis()),
-            2 => rotation(-z_axis(), -y_axis(), -x_axis()),
-            3 => rotation(y_axis(), z_axis(), x_axis()),
-            4 => rotation(z_axis(), x_axis(), y_axis()),
-            5 => rotation(-y_axis(), -x_axis(), -z_axis()),
-            6 => rotation(-x_axis(), z_axis(), y_axis()),
-            7 => rotation(x_axis(), -y_axis(), -z_axis()),
-            8 => rotation(z_axis(), -x_axis(), -y_axis()),
-            9 => rotation(-y_axis(), x_axis(), z_axis()),
-            10 => rotation(-z_axis(), y_axis(), x_axis()),
-            11 => rotation(y_axis(), -z_axis(), -x_axis()),
-            12 => rotation(-y_axis(), -z_axis(), x_axis()),
-            13 => rotation(z_axis(), y_axis(), -x_axis()),
-            14 => rotation(y_axis(), x_axis(), -z_axis()),
-            15 => rotation(-z_axis(), -x_axis(), y_axis()),
-            16 => rotation(-x_axis(), -y_axis(), z_axis()),
-            17 => rotation(x_axis(), z_axis(), -y_axis()),
-            18 => rotation(y_axis(), -x_axis(), z_axis()),
-            19 => rotation(-z_axis(), x_axis(), -y_axis()),
-            20 => rotation(-y_axis(), z_axis(), -x_axis()),
-            21 => rotation(z_axis(), -y_axis(), x_axis()),
-            22 => rotation(x_axis(), -z_axis(), y_axis()),
-            23 => rotation(-x_axis(), y_axis(), -z_axis()),
+            0 => rotation(x(), y(), z()),
+            1 => rotation(-x(), -z(), -y()),
+            2 => rotation(-z(), -y(), -x()),
+            3 => rotation(y(), z(), x()),
+            4 => rotation(z(), x(), y()),
+            5 => rotation(-y(), -x(), -z()),
+            6 => rotation(-x(), z(), y()),
+            7 => rotation(x(), -y(), -z()),
+            8 => rotation(z(), -x(), -y()),
+            9 => rotation(-y(), x(), z()),
+            10 => rotation(-z(), y(), x()),
+            11 => rotation(y(), -z(), -x()),
+            12 => rotation(-y(), -z(), x()),
+            13 => rotation(z(), y(), -x()),
+            14 => rotation(y(), x(), -z()),
+            15 => rotation(-z(), -x(), y()),
+            16 => rotation(-x(), -y(), z()),
+            17 => rotation(x(), z(), -y()),
+            18 => rotation(y(), -x(), z()),
+            19 => rotation(-z(), x(), -y()),
+            20 => rotation(-y(), z(), -x()),
+            21 => rotation(z(), -y(), x()),
+            22 => rotation(x(), -z(), y()),
+            23 => rotation(-x(), y(), -z()),
             _ => unreachable!(),
         }
     }
@@ -176,60 +167,38 @@ impl CubeRotation {
 mod test {
     use super::*;
 
-    type S4 = [usize; 4];
-
-    use itertools::Itertools;
-
-    fn to_s4(mut k: usize) -> S4 {
-        let mut nums = (0..4).collect_vec();
-        let order = (1..=4)
-            .map(|d| {
-                let r = k % d;
-                k /= d;
-                r
-            })
-            .collect_vec();
-
-        let mut res = Vec::with_capacity(4);
-        for i in order.into_iter().rev() {
-            res.push(nums.remove(i));
-        }
-
-        res.try_into().unwrap()
-    }
-
-    fn from_s4(s: S4) -> usize {
-        let mut nums = (0..4).collect_vec();
-        let mut k = 0;
-
-        for (d, x) in (1..=4).rev().zip(&s) {
-            let i = nums.binary_search(x).unwrap();
-            nums.remove(i);
-            k = k * d + i;
-        }
-
-        k
-    }
-
-    fn multiply(a: S4, b: S4) -> S4 {
-        let mut res = [0; 4];
-
-        for (x, i) in res.iter_mut().zip(a) {
-            *x = b[i];
-        }
-
-        res
-    }
+    // 0 -> [0, 1, 2, 3]
+    // 1 -> [0, 1, 3, 2]
+    // 2 -> [0, 2, 1, 3]
+    // 3 -> [0, 2, 3, 1]
+    // 4 -> [0, 3, 1, 2]
+    // 5 -> [0, 3, 2, 1]
+    // 6 -> [1, 0, 2, 3]
+    // 7 -> [1, 0, 3, 2]
+    // 8 -> [1, 2, 0, 3]
+    // 9 -> [1, 2, 3, 0]
+    // 10 -> [1, 3, 0, 2]
+    // 11 -> [1, 3, 2, 0]
+    // 12 -> [2, 0, 1, 3]
+    // 13 -> [2, 0, 3, 1]
+    // 14 -> [2, 1, 0, 3]
+    // 15 -> [2, 1, 3, 0]
+    // 16 -> [2, 3, 0, 1]
+    // 17 -> [2, 3, 1, 0]
+    // 18 -> [3, 0, 1, 2]
+    // 19 -> [3, 0, 2, 1]
+    // 20 -> [3, 1, 0, 2]
+    // 21 -> [3, 1, 2, 0]
+    // 22 -> [3, 2, 0, 1]
+    // 23 -> [3, 2, 1, 0]
 
     #[test]
     fn test() {
-        // z-rotation
-        let rot = CubeRotation(from_s4([3, 0, 1, 2]));
-        let mut x = CubeRotation(from_s4([3, 2, 1, 0]));
-
+        let r = CubeRotation(18);
+        let mut x = CubeRotation(0);
         for _ in 0..4 {
             println!("{}", x.0);
-            x = rot * x;
+            x = r * x;
         }
     }
 
