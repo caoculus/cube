@@ -11,7 +11,10 @@ use glium::{
     draw_parameters::PolygonOffset,
     glutin::{
         dpi::PhysicalPosition,
-        event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent},
+        event::{
+            ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, VirtualKeyCode,
+            WindowEvent,
+        },
         event_loop::{ControlFlow, EventLoop},
         window::WindowBuilder,
         ContextBuilder,
@@ -344,6 +347,8 @@ fn main() {
     let mut state = State::default();
     let mut cube_rotation: Rotation3<f32> = Rotation3::default();
 
+    let mut zoom = 1.0;
+
     event_loop.run(move |event, _, control_flow| {
         if !matches!(
             event,
@@ -356,7 +361,7 @@ fn main() {
 
         const CUBE_SCALE: f32 = 0.03;
         let model = Similarity3::from_parts(
-            Translation3::new(0.0, 0.0, -1.0),
+            Translation3::new(0.0, 0.0, -1.0 / zoom),
             cube_rotation.into(),
             CUBE_SCALE,
         );
@@ -498,11 +503,13 @@ fn main() {
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
-                    button: MouseButton::Left,
+                    button: button @ (MouseButton::Left | MouseButton::Right),
                     ..
                 } => {
                     let pos = mouse_to_screen_coords(mouse_pos, dimensions);
-                    state = if let Some(clicked) = clicked_face(pos, &model, &perspective) {
+                    state = if let (MouseButton::Left, Some(clicked)) =
+                        (button, clicked_face(pos, &model, &perspective))
+                    {
                         State::ClickedFace(clicked)
                     } else {
                         State::CubeRotation
@@ -511,7 +518,7 @@ fn main() {
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
-                    button: MouseButton::Left,
+                    button: MouseButton::Left | MouseButton::Right,
                     ..
                 } => {
                     if let State::LayerTurn(LayerTurn {
@@ -571,6 +578,17 @@ fn main() {
                     };
 
                     mouse_pos = (x, y);
+                }
+                WindowEvent::MouseWheel {
+                    delta: MouseScrollDelta::LineDelta(_, cols),
+                    ..
+                } => {
+                    const ZOOM_STEP: f32 = 0.05;
+                    const MIN_ZOOM: f32 = 0.5;
+                    const MAX_ZOOM: f32 = 1.5;
+
+                    zoom = (zoom + cols * ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
+                    display.gl_window().window().request_redraw();
                 }
                 WindowEvent::KeyboardInput {
                     input:
