@@ -23,7 +23,7 @@ use nalgebra::{
     Perspective3, Point2, Point3, Rotation3, Similarity3, Translation3, Unit, Vector2, Vector3,
 };
 use rand::Rng;
-use rotation::{Axis, CubeRotation, Turn};
+use rotation::{Axis, CubeRotation, QuarterTurn};
 use strum::{EnumIter, IntoEnumIterator};
 
 type Color = [f32; 3];
@@ -310,18 +310,11 @@ fn update_layer_turn(
 }
 
 fn rotate_face(
-    multiple: i32,
+    turn: QuarterTurn,
     layer_idx: usize,
     rotations: &mut [CubeRotation],
     cubie_idxs: &mut [usize],
 ) {
-    let turn = match multiple {
-        0 => Turn::None,
-        1 => Turn::Ccw,
-        2 => Turn::Half,
-        3 => Turn::Cw,
-        _ => panic!("multiple is out of bounds"),
-    };
     let rotation = CubeRotation::from_axis_turn(layer_to_axis(layer_idx), turn);
     let layer = LAYERS[layer_idx];
 
@@ -331,7 +324,7 @@ fn rotate_face(
     }
 
     match turn {
-        Turn::Ccw => {
+        QuarterTurn::Quarter => {
             for orbit in [[0, 2, 8, 6], [1, 5, 7, 3]] {
                 let tmp = cubie_idxs[layer[orbit[0]]];
                 for i in 0..3 {
@@ -340,12 +333,12 @@ fn rotate_face(
                 cubie_idxs[layer[orbit[3]]] = tmp;
             }
         }
-        Turn::Half => {
+        QuarterTurn::Half => {
             for [i, j] in [[0, 8], [2, 6], [1, 7], [3, 5]] {
                 cubie_idxs.swap(layer[i], layer[j]);
             }
         }
-        Turn::Cw => {
+        QuarterTurn::ThreeQuarters => {
             for orbit in [[0, 6, 8, 2], [1, 3, 7, 5]] {
                 let tmp = cubie_idxs[layer[orbit[0]]];
                 for i in 0..3 {
@@ -356,6 +349,10 @@ fn rotate_face(
         }
         _ => {}
     };
+}
+
+fn is_solved(cubie_idxs: &[usize]) -> bool {
+    todo!()
 }
 
 // TODO: draw wireframes
@@ -437,10 +434,11 @@ fn main() {
             const LIGHT_GREEN: (f32, f32, f32, f32) = (0.45, 0.91, 0.48, 1.0);
             const LIGHT_GREY: (f32, f32, f32, f32) = (0.9, 0.9, 0.9, 1.0);
 
-            // FIXME: using rotations to check whether the cube is solved doesn't work!!!
-            // e.g., if the centers are rotated
-            let solved = rotations.iter().all_equal();
-            let background_color = if solved { LIGHT_GREEN } else { LIGHT_GREY };
+            let background_color = if is_solved(&cubie_idxs) {
+                LIGHT_GREEN
+            } else {
+                LIGHT_GREY
+            };
 
             target.clear_color_and_depth(background_color, 1.0);
 
@@ -460,7 +458,7 @@ fn main() {
                         .into_iter()
                         .map(|i| cubie_idxs[i])
                         .collect(),
-                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit_vector(), *angle),
+                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit(), *angle),
                 )
             } else {
                 (HashSet::new(), Default::default())
@@ -580,15 +578,15 @@ fn main() {
                         layer_idx, angle, ..
                     }) = state
                     {
-                        let multiple = {
-                            let m = (angle / FRAC_PI_2).round();
-                            if m == 4.0 {
-                                0.0
-                            } else {
-                                m
-                            }
-                        } as i32;
-                        rotate_face(multiple, layer_idx, &mut rotations, &mut cubie_idxs);
+                        let multiple = (angle / FRAC_PI_2).round();
+                        let turn = match multiple as i32 {
+                            0 | 4 => QuarterTurn::Zero,
+                            1 => QuarterTurn::Quarter,
+                            2 => QuarterTurn::Half,
+                            3 => QuarterTurn::ThreeQuarters,
+                            _ => unreachable!("multiple should always be between 0 and 4"),
+                        };
+                        rotate_face(turn, layer_idx, &mut rotations, &mut cubie_idxs);
                         display.gl_window().window().request_redraw();
                     }
 
@@ -656,8 +654,13 @@ fn main() {
                         // random face turns
                         for _ in 0..100 {
                             let layer_idx = rand::thread_rng().gen_range(0..LAYERS.len());
-                            let multiple = rand::thread_rng().gen_range(1..=3);
-                            rotate_face(multiple, layer_idx, &mut rotations, &mut cubie_idxs);
+                            let turn = match rand::thread_rng().gen_range(1..=3) {
+                                1 => QuarterTurn::Quarter,
+                                2 => QuarterTurn::Half,
+                                3 => QuarterTurn::ThreeQuarters,
+                                _ => unreachable!(),
+                            };
+                            rotate_face(turn, layer_idx, &mut rotations, &mut cubie_idxs);
                         }
                         display.gl_window().window().request_redraw();
                     }
