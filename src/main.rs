@@ -62,7 +62,9 @@ const FACE_TURN_RATE: f32 = 4.0;
 enum State {
     #[default]
     Released,
-    CubeRotation,
+    CubeRotation {
+        button: MouseButton,
+    },
     ClickedFace(ClickedFace),
     LayerTurn(LayerTurn),
 }
@@ -506,21 +508,39 @@ fn main() {
                     button: button @ (MouseButton::Left | MouseButton::Right),
                     ..
                 } => {
+                    // in the case that button is already pressed, we don't want to do anything
+                    if !matches!(state, State::Released) {
+                        return;
+                    }
+
                     let pos = mouse_to_screen_coords(mouse_pos, dimensions);
                     state = if let (MouseButton::Left, Some(clicked)) =
                         (button, clicked_face(pos, &model, &perspective))
                     {
                         State::ClickedFace(clicked)
                     } else {
-                        State::CubeRotation
+                        State::CubeRotation { button }
                     };
                     display.gl_window().window().request_redraw();
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
-                    button: MouseButton::Left | MouseButton::Right,
+                    button: button @ (MouseButton::Left | MouseButton::Right),
                     ..
                 } => {
+                    // the released button should match the one that was pressed, otherwise don't
+                    // do anything
+                    let button_match = match state {
+                        State::Released => false,
+                        State::CubeRotation { button: expected } => button == expected,
+                        State::ClickedFace(_) => button == MouseButton::Left,
+                        State::LayerTurn(_) => button == MouseButton::Left,
+                    };
+
+                    if !button_match {
+                        return;
+                    }
+
                     if let State::LayerTurn(LayerTurn {
                         layer_idx, angle, ..
                     }) = state
@@ -544,7 +564,7 @@ fn main() {
                     ..
                 } => {
                     match &mut state {
-                        State::CubeRotation => {
+                        State::CubeRotation { .. } => {
                             const CUBE_ROTATION_RATE: f32 = 0.007;
 
                             // calculate a delta
