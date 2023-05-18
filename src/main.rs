@@ -342,7 +342,6 @@ fn main() {
     let program =
         Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
-    // mutable state of the cubie rotations
     let mut cube = Cube::new();
 
     let mut mouse_pos = (0.0, 0.0);
@@ -499,6 +498,8 @@ fn main() {
 
             target.finish().unwrap();
         } else if let Event::WindowEvent { event, .. } = event {
+            let request_redraw = || display.gl_window().window().request_redraw();
+
             match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
@@ -521,7 +522,7 @@ fn main() {
                     } else {
                         State::CubeRotation { button }
                     };
-                    display.gl_window().window().request_redraw();
+                    request_redraw();
                 }
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
@@ -554,7 +555,7 @@ fn main() {
                             _ => unreachable!("multiple should always be between 0 and 4"),
                         };
                         cube.rotate_layer(layer_idx, turn);
-                        display.gl_window().window().request_redraw();
+                        request_redraw();
                     }
 
                     state = State::Released;
@@ -578,21 +579,21 @@ fn main() {
 
                             // and apply it
                             cube_rotation = d_rotation * cube_rotation;
-                            display.gl_window().window().request_redraw();
+                            request_redraw();
                         }
                         State::ClickedFace(clicked) => {
                             let new_pos = mouse_to_screen_coords((x, y), dimensions);
 
                             if let Some(turn) = layer_turn(clicked, new_pos) {
                                 state = State::LayerTurn(turn);
-                                display.gl_window().window().request_redraw();
+                                request_redraw();
                             }
                         }
                         State::LayerTurn(turn) => {
                             // this should just modify the layer turn
                             let new_pos = mouse_to_screen_coords((x, y), dimensions);
                             update_layer_turn(turn, new_pos);
-                            display.gl_window().window().request_redraw();
+                            request_redraw();
                         }
                         _ => {}
                     };
@@ -608,7 +609,7 @@ fn main() {
                     const MAX_ZOOM: f32 = 1.5;
 
                     zoom = (zoom + cols * ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
-                    display.gl_window().window().request_redraw();
+                    request_redraw();
                 }
                 WindowEvent::KeyboardInput {
                     input:
@@ -625,7 +626,7 @@ fn main() {
                     VirtualKeyCode::R => {
                         // reset everything
                         cube.reset();
-                        display.gl_window().window().request_redraw();
+                        request_redraw();
                     }
                     VirtualKeyCode::S => {
                         // random face turns
@@ -643,7 +644,7 @@ fn main() {
                             };
                             cube.rotate_layer(layer_idx, turn);
                         }
-                        display.gl_window().window().request_redraw();
+                        request_redraw();
                     }
                     _ => {}
                 },
