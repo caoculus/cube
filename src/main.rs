@@ -302,6 +302,100 @@ fn update_layer_turn(
     *angle = (dot * FACE_TURN_RATE).rem_euclid(2.0 * PI);
 }
 
+struct CubeVertices {
+    face_vertices: Vec<Vertex>,
+    edge_vertices: Vec<Vertex>,
+}
+
+fn cube_to_vertices(
+    cube: &Cube,
+    translations: &[Vector3<f32>],
+    corners: &[Vector3<f32>],
+    state: &State,
+) -> CubeVertices {
+    const VERTS_PER_CUBIE: usize = 12;
+    const EDGES_PER_CUBIE: usize = 12;
+
+    let mut face_vertices: Vec<Vertex> = Vec::with_capacity(VERTS_PER_CUBIE * N_CUBIES);
+    let mut edge_vertices: Vec<Vertex> = Vec::with_capacity(EDGES_PER_CUBIE * N_CUBIES);
+
+    // an attempt at deduplication
+    let (face, face_rtn) = if let State::LayerTurn(LayerTurn {
+        layer_idx, angle, ..
+    }) = state
+    {
+        (
+            LAYERS[*layer_idx]
+                .into_iter()
+                .map(|i| cube.cubie_indices()[i])
+                .collect(),
+            Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit(), *angle),
+        )
+    } else {
+        (HashSet::new(), Default::default())
+    };
+
+    for (i, (&tln, &rtn)) in translations.iter().zip(cube.rotations()).enumerate() {
+        const RED: Color = [1.0, 0.0, 0.0];
+        const ORANGE: Color = [1.0, 0.5, 0.0];
+        const BLUE: Color = [0.0, 0.0, 1.0];
+        const GREEN: Color = [0.0, 1.0, 0.0];
+        const YELLOW: Color = [1.0, 1.0, 0.0];
+        const WHITE: Color = [1.0, 1.0, 1.0];
+        const GREY: Color = [0.3, 0.3, 0.3];
+        const BLACK: Color = [0.0, 0.0, 0.0];
+
+        const CUBE_INDICES: [[usize; 4]; N_CUBE_FACES] = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 4, 5],
+            [2, 3, 6, 7],
+            [0, 2, 4, 6],
+            [1, 3, 5, 7],
+        ];
+
+        // very ugly way of calculating colors lmao
+        let colors = [
+            if tln.x == MIN_SHIFT { RED } else { GREY },
+            if tln.x == MAX_SHIFT { ORANGE } else { GREY },
+            if tln.y == MIN_SHIFT { BLUE } else { GREY },
+            if tln.y == MAX_SHIFT { GREEN } else { GREY },
+            if tln.z == MIN_SHIFT { YELLOW } else { GREY },
+            if tln.z == MAX_SHIFT { WHITE } else { GREY },
+        ];
+
+        // might need to calculate a new rotation, depending on whether the face is
+        // rotated and whether this cubie matches
+        let rotation = if face.contains(&i) {
+            face_rtn * rtn.to_rotation3()
+        } else {
+            rtn.to_rotation3()
+        };
+
+        // now we can iterate over vertices for each cubie face
+        for (cubie_face, color) in CUBE_INDICES.into_iter().zip(colors) {
+            for pos in cubie_face.map(|i| corners[i]) {
+                face_vertices.push(Vertex {
+                    position: *rotation.transform_vector(&(pos + tln)).as_ref(),
+                    color,
+                })
+            }
+        }
+
+        for &pos in corners {
+            edge_vertices.push(Vertex {
+                position: *rotation.transform_vector(&(pos + tln)).as_ref(),
+                color: BLACK,
+            })
+        }
+    }
+
+    CubeVertices {
+        face_vertices,
+        edge_vertices,
+    }
+}
+
 fn main() {
     let event_loop = EventLoop::new();
     let wb = WindowBuilder::new().with_title("Rubik's Cube");
@@ -366,7 +460,6 @@ fn main() {
             cube_rotation.into(),
             CUBE_SCALE,
         );
-
         let perspective = {
             let (width, height) = dimensions;
             Perspective3::new(width as f32 / height as f32, PI / 6.0, 0.1, 1024.0)
@@ -387,84 +480,13 @@ fn main() {
 
             target.clear_color_and_depth(background_color, 1.0);
 
-            const VERTS_PER_CUBIE: usize = 12;
-            const EDGES_PER_CUBIE: usize = 12;
-
-            let mut face_vertices: Vec<Vertex> = Vec::with_capacity(VERTS_PER_CUBIE * N_CUBIES);
-            let mut edge_vertices: Vec<Vertex> = Vec::with_capacity(EDGES_PER_CUBIE * N_CUBIES);
-
-            // an attempt at deduplication
-            let (face, face_rtn) = if let State::LayerTurn(LayerTurn {
-                layer_idx, angle, ..
-            }) = &state
-            {
-                (
-                    LAYERS[*layer_idx]
-                        .into_iter()
-                        .map(|i| cube.cubie_indices()[i])
-                        .collect(),
-                    Rotation3::from_axis_angle(&layer_to_axis(*layer_idx).to_unit(), *angle),
-                )
-            } else {
-                (HashSet::new(), Default::default())
-            };
-
-            for (i, (&tln, &rtn)) in translations.iter().zip(cube.rotations()).enumerate() {
-                const RED: Color = [1.0, 0.0, 0.0];
-                const ORANGE: Color = [1.0, 0.5, 0.0];
-                const BLUE: Color = [0.0, 0.0, 1.0];
-                const GREEN: Color = [0.0, 1.0, 0.0];
-                const YELLOW: Color = [1.0, 1.0, 0.0];
-                const WHITE: Color = [1.0, 1.0, 1.0];
-                const GREY: Color = [0.3, 0.3, 0.3];
-                const BLACK: Color = [0.0, 0.0, 0.0];
-
-                const CUBE_INDICES: [[usize; 4]; N_CUBE_FACES] = [
-                    [0, 1, 2, 3],
-                    [4, 5, 6, 7],
-                    [0, 1, 4, 5],
-                    [2, 3, 6, 7],
-                    [0, 2, 4, 6],
-                    [1, 3, 5, 7],
-                ];
-
-                // very ugly way of calculating colors lmao
-                let colors = [
-                    if tln.x == MIN_SHIFT { RED } else { GREY },
-                    if tln.x == MAX_SHIFT { ORANGE } else { GREY },
-                    if tln.y == MIN_SHIFT { BLUE } else { GREY },
-                    if tln.y == MAX_SHIFT { GREEN } else { GREY },
-                    if tln.z == MIN_SHIFT { YELLOW } else { GREY },
-                    if tln.z == MAX_SHIFT { WHITE } else { GREY },
-                ];
-
-                // might need to calculate a new rotation, depending on whether the face is
-                // rotated and whether this cubie matches
-                let rotation = if face.contains(&i) {
-                    face_rtn * rtn.to_rotation3()
-                } else {
-                    rtn.to_rotation3()
-                };
-
-                // now we can iterate over vertices for each cubie face
-                for (cubie_face, color) in CUBE_INDICES.into_iter().zip(colors) {
-                    for pos in cubie_face.map(|i| corners[i]) {
-                        face_vertices.push(Vertex {
-                            position: *rotation.transform_vector(&(pos + tln)).as_ref(),
-                            color,
-                        })
-                    }
-                }
-
-                for &pos in &corners {
-                    edge_vertices.push(Vertex {
-                        position: *rotation.transform_vector(&(pos + tln)).as_ref(),
-                        color: BLACK,
-                    })
-                }
-            }
+            let CubeVertices {
+                face_vertices,
+                edge_vertices,
+            } = cube_to_vertices(&cube, &translations, &corners, &state);
 
             let face_vertices = VertexBuffer::new(&display, &face_vertices).unwrap();
+            let edge_vertices = VertexBuffer::new(&display, &edge_vertices).unwrap();
 
             let uniforms = uniform! {
                 model: model.to_homogeneous().as_ref().to_owned(),
@@ -491,7 +513,6 @@ fn main() {
                 .draw(&face_vertices, &face_indices, &program, &uniforms, &params)
                 .unwrap();
 
-            let edge_vertices = VertexBuffer::new(&display, &edge_vertices).unwrap();
             target
                 .draw(&edge_vertices, &edge_indices, &program, &uniforms, &params)
                 .unwrap();
@@ -546,15 +567,18 @@ fn main() {
                         layer_idx, angle, ..
                     }) = state
                     {
-                        let multiple = (angle / FRAC_PI_2).round();
-                        let turn = match multiple as i32 {
-                            0 | 4 => QuarterTurn::Zero,
-                            1 => QuarterTurn::Quarter,
-                            2 => QuarterTurn::Half,
-                            3 => QuarterTurn::ThreeQuarters,
-                            _ => unreachable!("multiple should always be between 0 and 4"),
+                        let snapped_turn = {
+                            let multiple = (angle / FRAC_PI_2).round();
+                            match multiple as i32 {
+                                0 | 4 => QuarterTurn::Zero,
+                                1 => QuarterTurn::Quarter,
+                                2 => QuarterTurn::Half,
+                                3 => QuarterTurn::ThreeQuarters,
+                                _ => unreachable!("multiple should always be between 0 and 4"),
+                            }
                         };
-                        cube.rotate_layer(layer_idx, turn);
+
+                        cube.rotate_layer(layer_idx, snapped_turn);
                         request_redraw();
                     }
 
@@ -568,14 +592,16 @@ fn main() {
                         State::CubeRotation { .. } => {
                             const CUBE_ROTATION_RATE: f32 = 0.007;
 
-                            // calculate a delta
-                            let (x0, y0) = mouse_pos;
-                            let (dx, dy) = ((x - x0) as f32, (y - y0) as f32);
+                            let d_rotation = {
+                                // calculate a delta
+                                let (x0, y0) = mouse_pos;
+                                let (dx, dy) = ((x - x0) as f32, (y - y0) as f32);
 
-                            // convert delta to a rotation
-                            let d_rotation = Rotation3::from_scaled_axis(
-                                Vector3::new(dy, dx, 0.0).scale(CUBE_ROTATION_RATE),
-                            );
+                                // convert delta to a rotation
+                                Rotation3::from_scaled_axis(
+                                    Vector3::new(dy, dx, 0.0).scale(CUBE_ROTATION_RATE),
+                                )
+                            };
 
                             // and apply it
                             cube_rotation = d_rotation * cube_rotation;
@@ -629,21 +655,24 @@ fn main() {
                         request_redraw();
                     }
                     VirtualKeyCode::S => {
-                        // random face turns
-                        for _ in 0..100 {
-                            const FRINGE_LAYERS: [usize; 6] = [0, 2, 3, 5, 6, 8];
+                        fn scramble_cube(cube: &mut Cube) {
+                            for _ in 0..100 {
+                                const FRINGE_LAYERS: [usize; 6] = [0, 2, 3, 5, 6, 8];
 
-                            let mut rng = rand::thread_rng();
+                                let mut rng = rand::thread_rng();
 
-                            let layer_idx = *FRINGE_LAYERS.choose(&mut rng).unwrap();
-                            let turn = match rng.gen_range(1..=3) {
-                                1 => QuarterTurn::Quarter,
-                                2 => QuarterTurn::Half,
-                                3 => QuarterTurn::ThreeQuarters,
-                                _ => unreachable!(),
-                            };
-                            cube.rotate_layer(layer_idx, turn);
+                                let layer_idx = *FRINGE_LAYERS.choose(&mut rng).unwrap();
+                                let turn = match rng.gen_range(1..=3) {
+                                    1 => QuarterTurn::Quarter,
+                                    2 => QuarterTurn::Half,
+                                    3 => QuarterTurn::ThreeQuarters,
+                                    _ => unreachable!(),
+                                };
+                                cube.rotate_layer(layer_idx, turn);
+                            }
                         }
+
+                        scramble_cube(&mut cube);
                         request_redraw();
                     }
                     _ => {}
